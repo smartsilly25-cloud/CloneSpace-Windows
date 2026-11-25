@@ -1,0 +1,94 @@
+name: Build CloneSpace APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Zip tidak perlu di-extract manual: diekstrak otomatis di sini
+      - name: Extract CloneSpace-source.zip
+        run: |
+          unzip -q CloneSpace-source.zip -d src
+          ls src
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK, platform and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.13846066"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('src/CloneSpace/**/*.gradle', 'src/CloneSpace/gradle/libs.versions.toml', 'src/CloneSpace/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Build debug APK
+        working-directory: src/CloneSpace
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloneSpace-debug-apk
+          path: src/CloneSpace/app/build/outputs/apk/debug/*.apk
+
+  windows-installer:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Extract CloneSpace-source.zip
+        shell: pwsh
+        run: Expand-Archive -Path CloneSpace-source.zip -DestinationPath src
+
+      - name: Download APK dari job build
+        uses: actions/download-artifact@v4
+        with:
+          name: CloneSpace-debug-apk
+          path: apk
+
+      - name: Siapkan APK universal
+        shell: pwsh
+        run: |
+          $apk = Get-ChildItem apk -Filter *universal*.apk | Select-Object -First 1
+          Copy-Item $apk.FullName src/CloneSpace/windows/CloneSpace.apk
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer Windows
+        shell: pwsh
+        working-directory: src/CloneSpace/windows
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" CloneSpace.iss'
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloneSpace-Windows-Setup
+          path: src/CloneSpace/windows/output/CloneSpace-Setup.exe
